@@ -1,0 +1,15 @@
+{
+  "name": "digital-footprint-self-check",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-exposure scanner: see your own online footprint and get a remediation worklist.",
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "dev": "npm run dev --workspace=server & npm run dev --workspace=client",
+    "dev:server": "npm run dev --workspace=server",
+    "dev:client": "npm run dev --workspace=client",
+    "build": "npm run build --workspace=client",
+    "test": "npm test --workspace=server"
+  },
+  "engines": { "node": ">=20" }
+}
