@@ -131,9 +131,45 @@ returns a clear 503 — useful for exercising the gate without spending on
 queries.
 
 ```bash
-npm test                   # 30 tests: gate behavior, fail-closed, normalization, worklist
+npm test                   # 34 tests: gate behavior, fail-closed, normalization, worklist
 npm run build              # production client bundle
 ```
+
+## Deploying to Vercel
+
+`vercel.json` builds the client to `client/dist` and routes `/api/*` to
+`api/index.mjs`, which exports the same Express app without `listen`.
+
+Set these in **Project → Settings → Environment Variables** before deploying.
+The app will start without them, but every `/api` route returns a 503 naming
+what is absent, and `/api/health` lists them:
+
+| Variable | Why |
+| --- | --- |
+| `SESSION_SECRET` | Signs session tokens. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ADMIN_API_KEY` | The approval authority. Without it nothing can be approved, so nothing runs |
+| `SERPAPI_KEY` | The query layer. Without it scans return 503 |
+
+Missing configuration is reported rather than thrown. An earlier version threw
+at import time, which on Vercel surfaced as `FUNCTION_INVOCATION_FAILED` on
+every route — including `/favicon.ico` — with the cause visible only in the
+platform logs. `server/test/misconfigured.test.js` locks in the current
+behavior.
+
+### Serverless and the in-memory stores
+
+**This deployment shape is not production-ready as-is.** Approvals and sessions
+live in `TtlStore` (in memory). Serverless instances are ephemeral and plural,
+so an approval issued by one instance is invisible to another: a perfectly
+valid code comes back as "invalid", intermittently, in a way that looks like a
+bug in the approval logic. Low traffic on a warm instance hides this, which
+makes it worse — it will work in testing and fail in front of a user.
+
+Before real use, point `TtlStore` at Redis (Vercel KV, Upstash, or any Redis).
+It is a four-method interface — `set`, `get`, `delete`, `sweep` — specifically
+so that swap is contained to one file. A long-lived Node host (Render, Fly,
+Railway, a container) is the other option and needs no code change: run
+`npm start --workspace=server`.
 
 ## API
 

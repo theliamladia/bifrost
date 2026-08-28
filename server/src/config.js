@@ -1,18 +1,35 @@
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 
-dotenv.config({ path: new URL('../../.env', import.meta.url).pathname });
+// A local .env is a convenience, not a requirement: hosted deployments inject
+// their own environment, and there is no file to read there.
+dotenv.config({ path: new URL('../../.env', import.meta.url).pathname, quiet: true });
 
 const isProd = process.env.NODE_ENV === 'production';
 
+/**
+ * Missing production configuration is reported, not thrown.
+ *
+ * Throwing here happens at import time, which on a serverless host surfaces as
+ * an opaque FUNCTION_INVOCATION_FAILED with no indication of which variable is
+ * missing. Instead the server starts, /api/health names what is absent, and
+ * every other route fails closed with the same list. Same refusal to run, far
+ * better diagnostics.
+ */
+const missingRequired = [];
+
 function requiredInProd(name, value, fallback) {
   if (value) return value;
-  if (isProd) throw new Error(`${name} must be set in production`);
+  if (isProd) {
+    missingRequired.push(name);
+    return '';
+  }
   return fallback;
 }
 
 export const config = {
   isProd,
+  missingRequired,
   port: Number(process.env.PORT || 8787),
 
   // Ephemeral fallback: restarting dev invalidates old sessions, which is fine.

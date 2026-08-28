@@ -19,12 +19,26 @@ export function createApp() {
     next();
   });
 
+  // Health answers even when the deployment is misconfigured — it is how you
+  // find out what is missing.
   app.get('/api/health', (_req, res) => {
     res.json({
-      ok: true,
+      ok: config.missingRequired.length === 0,
+      missingConfiguration: config.missingRequired,
       searchConfigured: Boolean(config.serpapi.key),
       approvalAuthority: config.adminApiKey ? 'configured' : 'missing',
       scansRequireApproval: true,
+    });
+  });
+
+  // Fail closed on a half-configured deployment, and say which variable is
+  // missing rather than crashing with a stack trace the browser cannot show.
+  app.use('/api', (_req, res, next) => {
+    if (config.missingRequired.length === 0) return next();
+    console.error(`[config] refusing to serve; missing: ${config.missingRequired.join(', ')}`);
+    return res.status(503).json({
+      error: 'server_misconfigured',
+      message: `This deployment is missing required configuration: ${config.missingRequired.join(', ')}.`,
     });
   });
 
