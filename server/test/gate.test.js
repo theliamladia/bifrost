@@ -1,21 +1,15 @@
 /**
- * The gate is the product. These tests exercise the real HTTP surface: no
- * query runs without a confirmed OTP, and a confirmed OTP cannot be pointed at
- * a different name than the one it was issued for.
+ * The gate is the product. These tests exercise the real HTTP surface: consent
+ * originates with an administrator, no query runs without a redeemed approval,
+ * and a redeemed approval cannot be re-pointed at a different person.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.NODE_ENV = 'test';
 process.env.SESSION_SECRET = 'test-secret-not-for-production';
-process.env.OTP_EMAIL_PROVIDER = 'console';
-process.env.OTP_SMS_PROVIDER = 'console';
 process.env.ADMIN_API_KEY = 'test-admin-key';
 delete process.env.SERPAPI_KEY;
-// The suite drives many verifications from one IP; raise the per-IP caps so the
-// tests exercise the gate rather than the rate limiter (which has its own test).
-process.env.LIMIT_START_PER_IP = '100';
-process.env.LIMIT_CONFIRM_PER_IP = '200';
 
 const { createApp } = await import('../src/app.js');
 
@@ -24,22 +18,6 @@ await new Promise((resolve) => server.once('listening', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 test.after(() => server.close());
 
-/** The console OTP provider prints the code; capture it instead of guessing. */
-async function withCapturedCode(fn) {
-  const original = console.log;
-  let captured = null;
-  console.log = (...args) => {
-    const match = /\b(\d{6})\b/.exec(args.join(' '));
-    if (match) captured = match[1];
-  };
-  try {
-    const result = await fn();
-    return { result, code: captured };
-  } finally {
-    console.log = original;
-  }
-}
-
 const post = (path, body, headers = {}) =>
   fetch(`${base}${path}`, {
     method: 'POST',
@@ -47,10 +25,29 @@ const post = (path, body, headers = {}) =>
     body: JSON.stringify(body),
   });
 
+const ADMIN = { 'x-admin-key': 'test-admin-key' };
+
+async function approve(subjectName, overrides = {}) {
+  const res = await post(
+    '/api/admin/approvals',
+    { subjectName, relationship: 'self', reason: 'requester is the subject, ID checked', ...overrides },
+    ADMIN,
+  );
+  assert.equal(res.status, 201, 'approval should be issued');
+  return (await res.json()).approvalCode;
+}
+
+async function approvedSession(subjectName, overrides = {}) {
+  const approvalCode = await approve(subjectName, overrides);
+  const res = await post('/api/session/redeem', { approvalCode });
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
 test('a scan without a token is refused', async () => {
   const res = await post('/api/scan', {});
   assert.equal(res.status, 401);
-  assert.equal((await res.json()).error, 'verification_required');
+  assert.equal((await res.json()).error, 'approval_required');
 });
 
 test('a scan with a forged token is refused', async () => {
@@ -58,128 +55,128 @@ test('a scan with a forged token is refused', async () => {
   assert.equal(res.status, 401);
 });
 
-test('starting verification requires the self-check attestation', async () => {
-  const res = await post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada@example.com' });
+test('there is no way to start a check without an approval code', async () => {
+  const res = await post('/api/session/redeem', {});
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, 'approval_required');
+});
+
+test('a made-up approval code is refused', async () => {
+  const res = await post('/api/session/redeem', { approvalCode: 'not-a-real-code' });
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, 'invalid_approval');
+});
+
+test('a requester cannot name the subject — the name comes off the approval', async () => {
+  const approvalCode = await approve('Ada Lovelace');
+  // Anything the requester sends alongside the code is ignored.
+  const res = await post('/api/session/redeem', {
+    approvalCode,
+    name: 'Someone Else',
+    subjectName: 'Someone Else',
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).name, 'Ada Lovelace');
+});
+
+test('only an admin can issue an approval', async () => {
+  const noKey = await post('/api/admin/approvals', {
+    subjectName: 'Ada Lovelace',
+    reason: 'signed authorization on file',
+  });
+  assert.equal(noKey.status, 401);
+
+  const wrongKey = await post(
+    '/api/admin/approvals',
+    { subjectName: 'Ada Lovelace', reason: 'signed authorization on file' },
+    { 'x-admin-key': 'wrong-key-same-length' },
+  );
+  assert.equal(wrongKey.status, 401);
+});
+
+test('an approval needs a recorded reason', async () => {
+  const res = await post(
+    '/api/admin/approvals',
+    { subjectName: 'Ada Lovelace', reason: 'ok' },
+    ADMIN,
+  );
   assert.equal(res.status, 400);
-  assert.equal((await res.json()).error, 'attestation_required');
+  assert.equal((await res.json()).error, 'reason_required');
 });
 
-test('the code is never returned to the client', async () => {
-  const { result } = await withCapturedCode(() =>
-    post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada@example.com', attestSelf: true }),
+test('an unknown relationship is rejected', async () => {
+  const res = await post(
+    '/api/admin/approvals',
+    { subjectName: 'Ada Lovelace', relationship: 'whatever', reason: 'signed authorization on file' },
+    ADMIN,
   );
-  const body = await result.json();
-  assert.equal(result.status, 201);
-  assert.equal(body.sentTo, 'a**@example.com');
-  assert.equal(body.code, undefined);
-  assert.equal(JSON.stringify(body).match(/\b\d{6}\b/), null);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'invalid_relationship');
 });
 
-test('a wrong code does not verify, and the right one does', async () => {
-  const { result, code } = await withCapturedCode(() =>
-    post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada2@example.com', attestSelf: true }),
-  );
-  const { challengeId } = await result.json();
-  assert.match(code, /^\d{6}$/);
+test('an approval is single use', async () => {
+  const approvalCode = await approve('Ada Lovelace');
+  assert.equal((await post('/api/session/redeem', { approvalCode })).status, 200);
 
-  const wrong = await post('/api/verify/confirm', { challengeId, code: code === '000000' ? '111111' : '000000' });
-  assert.equal(wrong.status, 401);
+  const reused = await post('/api/session/redeem', { approvalCode });
+  assert.equal(reused.status, 403);
+  assert.equal((await reused.json()).error, 'invalid_approval');
+});
 
-  const right = await post('/api/verify/confirm', { challengeId, code });
-  assert.equal(right.status, 200);
-  const session = await right.json();
+test('a revoked approval stops working', async () => {
+  const approvalCode = await approve('Ada Lovelace');
+  const revoked = await fetch(`${base}/api/admin/approvals/${encodeURIComponent(approvalCode)}`, {
+    method: 'DELETE',
+    headers: ADMIN,
+  });
+  assert.equal((await revoked.json()).revoked, true);
+
+  const res = await post('/api/session/redeem', { approvalCode });
+  assert.equal(res.status, 403);
+});
+
+test('redeeming reports the approval it came from, and is honest about what it proves', async () => {
+  const session = await approvedSession('Ada Lovelace', { issuedBy: 'compliance@example.com' });
   assert.equal(session.name, 'Ada Lovelace');
-  assert.equal(session.subject, 'self');
+  assert.equal(session.relationship, 'self');
+  assert.equal(session.approvedBy, 'compliance@example.com');
   assert.ok(session.token);
-  assert.match(session.verificationNote, /not proof/i);
+  assert.match(session.approvalNote, /does not verify who redeemed it/i);
 });
 
-test('a challenge is single use', async () => {
-  const { result, code } = await withCapturedCode(() =>
-    post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada3@example.com', attestSelf: true }),
-  );
-  const { challengeId } = await result.json();
-  assert.equal((await post('/api/verify/confirm', { challengeId, code })).status, 200);
-  assert.equal((await post('/api/verify/confirm', { challengeId, code })).status, 404);
+test('an approval can record who it was handed to, redacted on the way back', async () => {
+  const session = await approvedSession('Ada Lovelace', { issuedTo: 'ada@example.com' });
+  assert.equal(session.issuedTo, 'a**@example.com');
 });
 
-test('a verified session scans its own name only — the body cannot redirect it', async () => {
-  const { result, code } = await withCapturedCode(() =>
-    post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada4@example.com', attestSelf: true }),
-  );
-  const { challengeId } = await result.json();
-  const { token } = await (await post('/api/verify/confirm', { challengeId, code })).json();
+test('a session scans its approved name only — the body cannot redirect it', async () => {
+  const { token } = await approvedSession('Ada Lovelace');
 
-  // SERPAPI_KEY is unset, so a scan that gets past the gate fails at the
-  // search layer (503) rather than at the gate (401). That distinction is the
-  // assertion: the session authorized a scan, and it authorized it for its own
-  // name — "Someone Else" in the body is ignored entirely.
+  // SERPAPI_KEY is unset, so a scan that gets past the gate fails at the search
+  // layer (503) rather than at the gate (401/403). That distinction is the
+  // assertion: the session authorized a scan for the approved name, and
+  // "Someone Else" in the body is ignored entirely.
   const res = await post('/api/scan', { name: 'Someone Else' }, { Authorization: `Bearer ${token}` });
   assert.equal(res.status, 503);
   assert.equal((await res.json()).error, 'search_unavailable');
 });
 
-test('third-party lookups need an admin grant, and the grant is pinned', async () => {
-  const rejected = await post('/api/verify/start', {
-    name: 'Someone Else',
-    contact: 'operator@example.com',
-    grantToken: 'made-up-token',
+test('a third-party check is the same gate, recorded as third-party', async () => {
+  const session = await approvedSession('Someone Else', {
+    relationship: 'third-party',
+    reason: 'signed written authorization from the subject on file',
   });
-  assert.equal(rejected.status, 403);
-
-  const noKey = await post('/api/admin/grants', { subjectName: 'Someone Else', requesterContact: 'operator@example.com', reason: 'signed authorization on file' });
-  assert.equal(noKey.status, 401);
-
-  const granted = await post(
-    '/api/admin/grants',
-    { subjectName: 'Someone Else', requesterContact: 'operator@example.com', reason: 'signed authorization on file' },
-    { 'x-admin-key': 'test-admin-key' },
-  );
-  assert.equal(granted.status, 201);
-  const { grantToken } = await granted.json();
-
-  // Pinned to the name it was issued for...
-  const wrongName = await post('/api/verify/start', {
-    name: 'A Third Party',
-    contact: 'operator@example.com',
-    grantToken,
-  });
-  assert.equal(wrongName.status, 403);
-  assert.equal((await wrongName.json()).error, 'grant_mismatch');
-
-  // ...and to the requester's own contact, which still has to pass OTP.
-  const wrongContact = await post('/api/verify/start', {
-    name: 'Someone Else',
-    contact: 'other@example.com',
-    grantToken,
-  });
-  assert.equal(wrongContact.status, 403);
-
-  const { result, code } = await withCapturedCode(() =>
-    post('/api/verify/start', { name: 'Someone Else', contact: 'operator@example.com', grantToken }),
-  );
-  const { challengeId } = await result.json();
-  const confirmed = await post('/api/verify/confirm', { challengeId, code });
-  assert.equal(confirmed.status, 200);
-  assert.equal((await confirmed.json()).subject, 'admin-approved');
-
-  // Single use: the same grant cannot start a second verification.
-  const reused = await post('/api/verify/start', {
-    name: 'Someone Else',
-    contact: 'operator@example.com',
-    grantToken,
-  });
-  assert.equal(reused.status, 403);
+  assert.equal(session.relationship, 'third-party');
 });
 
-test('with no admin key configured the endpoint would not exist — key here is test-only', async () => {
-  const res = await fetch(`${base}/api/health`);
-  const body = await res.json();
-  assert.equal(body.thirdPartyLookups, 'admin-gated');
+test('health reports that approval is required and configured', async () => {
+  const body = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(body.scansRequireApproval, true);
+  assert.equal(body.approvalAuthority, 'configured');
   assert.equal(body.searchConfigured, false);
 });
 
-test('end to end: verified session produces a worklist with opt-out links', async () => {
+test('end to end: an approved check produces a worklist with opt-out links', async () => {
   const { config } = await import('../src/config.js');
   const realFetch = globalThis.fetch;
 
@@ -205,18 +202,15 @@ test('end to end: verified session produces a worklist with opt-out links', asyn
   };
 
   try {
-    const { result, code } = await withCapturedCode(() =>
-      post('/api/verify/start', { name: 'Ada Lovelace', contact: 'ada5@example.com', attestSelf: true }),
-    );
-    const { challengeId } = await result.json();
-    const { token } = await (await post('/api/verify/confirm', { challengeId, code })).json();
-
+    const { token } = await approvedSession('Ada Lovelace');
     const res = await post('/api/scan', {}, { Authorization: `Bearer ${token}` });
     assert.equal(res.status, 200);
     const worklist = await res.json();
 
     assert.deepEqual(worklist.partialFailures, []);
     assert.equal(worklist.checkedName, 'Ada Lovelace');
+    assert.equal(worklist.relationship, 'self');
+    assert.ok(worklist.approvalId, 'the scan is traceable to the approval that authorized it');
     assert.equal(worklist.summary.total, 3);
     assert.equal(worklist.summary.brokerListings, 2);
     assert.equal(worklist.items[0].action.type, 'opt-out');

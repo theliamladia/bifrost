@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeContact, normalizeName, redactContact, ContactError } from '../src/lib/contact.js';
 
+// normalizeContact backs the optional "who was this approval handed to" field
+// in the audit record; normalizeName backs the subject of every approval.
+
 test('normalizes emails to one canonical form', () => {
   assert.deepEqual(normalizeContact('  Person@Example.COM '), { channel: 'email', value: 'person@example.com' });
 });

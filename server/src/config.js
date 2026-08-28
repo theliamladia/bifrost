@@ -22,42 +22,18 @@ export const config = {
     crypto.randomBytes(32).toString('hex'),
   ),
 
-  // Empty => third-party lookups are disabled outright.
-  adminApiKey: process.env.ADMIN_API_KEY || '',
+  // The approval authority. Every scan needs an approval issued with this key,
+  // so an unset key means the deployment approves nothing and runs nothing.
+  adminApiKey: requiredInProd('ADMIN_API_KEY', process.env.ADMIN_API_KEY, ''),
 
-  otp: {
-    codeLength: 6,
-    ttlMs: 10 * 60 * 1000,
-    maxAttempts: 5,
-    resendCooldownMs: 30 * 1000,
-    emailProvider: process.env.OTP_EMAIL_PROVIDER || 'console',
-    smsProvider: process.env.OTP_SMS_PROVIDER || 'console',
-  },
-
-  // A verified session is short-lived and single-purpose.
+  // A redeemed approval is short-lived and single-purpose.
   session: { ttlMs: 30 * 60 * 1000, maxScans: 5 },
 
-  // Every entry point that costs money (an SMS, a SerpAPI query) is capped.
+  // Every entry point that costs money (a SerpAPI query) is capped.
   // Tunable per deployment; the defaults are what a single real user needs.
   limits: {
-    startPerIpPer15Min: Number(process.env.LIMIT_START_PER_IP || 10),
-    startPerContactPerHour: Number(process.env.LIMIT_START_PER_CONTACT || 5),
-    confirmPerIpPer15Min: Number(process.env.LIMIT_CONFIRM_PER_IP || 30),
+    redeemPerIpPer15Min: Number(process.env.LIMIT_REDEEM_PER_IP || 30),
     scansPerIpPerHour: Number(process.env.LIMIT_SCANS_PER_IP || 20),
-  },
-
-  postmark: {
-    token: process.env.POSTMARK_SERVER_TOKEN || '',
-    from: process.env.POSTMARK_FROM || '',
-  },
-  ses: {
-    region: process.env.AWS_REGION || 'us-east-1',
-    from: process.env.SES_FROM || '',
-  },
-  twilio: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID || '',
-    authToken: process.env.TWILIO_AUTH_TOKEN || '',
-    from: process.env.TWILIO_FROM || '',
   },
 
   serpapi: { key: process.env.SERPAPI_KEY || '' },

@@ -17,8 +17,9 @@ scanRouter.post(
   async (req, res, next) => {
     const session = req.session;
     try {
-      // The name is taken from the verified session, never from the request
-      // body — otherwise a single verification would become a search box.
+      // The name comes from the session, and it got there from the approval an
+      // administrator issued — never from the request body. Otherwise a single
+      // approval would become a search box.
       const { findings, errors, queriesRun } = await searchGoogle(session.name, {
         location: typeof req.body?.location === 'string' ? req.body.location.slice(0, 80) : undefined,
       });
@@ -28,8 +29,9 @@ scanRouter.post(
 
       return res.json({
         ...worklist,
-        verifiedContact: session.contact.channel,
-        subject: session.subject === 'self' ? 'self' : 'admin-approved',
+        approvalId: session.approval.id,
+        approvedBy: session.approval.issuedBy,
+        relationship: session.approval.relationship,
         scansRemaining: Math.max(config.session.maxScans - session.scansUsed, 0),
         queriesRun,
         partialFailures: errors,

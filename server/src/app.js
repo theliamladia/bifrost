@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { config } from './config.js';
-import { verifyRouter } from './routes/verify.js';
+import { sessionRouter } from './routes/session.js';
 import { scanRouter } from './routes/scan.js';
 import { adminRouter } from './routes/admin.js';
 
@@ -23,13 +23,12 @@ export function createApp() {
     res.json({
       ok: true,
       searchConfigured: Boolean(config.serpapi.key),
-      emailProvider: config.otp.emailProvider,
-      smsProvider: config.otp.smsProvider,
-      thirdPartyLookups: config.adminApiKey ? 'admin-gated' : 'disabled',
+      approvalAuthority: config.adminApiKey ? 'configured' : 'missing',
+      scansRequireApproval: true,
     });
   });
 
-  app.use('/api/verify', verifyRouter);
+  app.use('/api/session', sessionRouter);
   app.use('/api/scan', scanRouter);
   app.use('/api/admin', adminRouter);
 

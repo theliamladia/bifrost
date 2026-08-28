@@ -1,8 +1,9 @@
 /**
- * Contact normalization for the verified channel.
+ * Contact normalization.
  *
- * The channel is what consent is bound to, so it must normalize to exactly one
- * canonical string — otherwise "a@b.com" and "A@B.com " look like two people.
+ * Used for the optional record of who an approval was handed to, so it must
+ * normalize to exactly one canonical string — otherwise "a@b.com" and
+ * "A@B.com " look like two people in the audit log.
  */
 
 const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
@@ -17,7 +18,7 @@ export class ContactError extends Error {
 
 export function normalizeContact(raw) {
   const input = String(raw ?? '').trim();
-  if (!input) throw new ContactError('Enter an email address or phone number you control.');
+  if (!input) throw new ContactError('Enter an email address or phone number.');
 
   if (input.includes('@')) {
     const value = input.toLowerCase();

@@ -27,9 +27,7 @@ async function request(path, { method = 'POST', body, token } = {}) {
 
 export const api = {
   health: () => request('/health', { method: 'GET' }),
-  startVerification: (payload) => request('/verify/start', { body: payload }),
-  resendCode: (challengeId) => request('/verify/resend', { body: { challengeId } }),
-  confirmCode: (challengeId, code) => request('/verify/confirm', { body: { challengeId, code } }),
+  redeemApproval: (approvalCode) => request('/session/redeem', { body: { approvalCode } }),
   scan: (token, payload = {}) => request('/scan', { body: payload, token }),
 };
 
