@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "description": "Self-exposure scanner: see your own online footprint and get a remediation worklist.",
-  "workspaces": ["server", "client"],
+  "type": "module",
+  "workspaces": [
+    "server",
+    "client"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace=server & npm run dev --workspace=client",
     "dev:server": "npm run dev --workspace=server",
@@ -11,5 +15,7 @@
     "build": "npm run build --workspace=client",
     "test": "npm test --workspace=server"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": "22.x"
+  }
 }
